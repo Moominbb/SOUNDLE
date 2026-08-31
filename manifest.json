@@ -1,0 +1,14 @@
+{
+  "name": "Word Complexity Tracker",
+  "short_name": "Word Complexity",
+  "description": "Score words for phonological complexity and track sound acquisition over time.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F7F5F1",
+  "theme_color": "#2F6E6B",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
