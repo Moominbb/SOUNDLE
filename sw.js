@@ -1,4 +1,4 @@
-const CACHE_NAME = "soundle-v2";
+const CACHE_NAME = "soundle-v3";
 const ASSETS = [
   "./",
   "./index.html",
