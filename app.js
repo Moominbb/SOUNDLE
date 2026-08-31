@@ -116,8 +116,17 @@ const RULE_COLORS = {
   fricatives_affricates: "#4A7FA8", voiced_fric_affricate: "#9B7B3F",
 };
 const TIMEPOINT_LABELS = { known1: "Timepoint 1", known2: "Timepoint 2" };
-const ACQUIRED_COLOR = "#5A6E3A";
-const NOT_ACQUIRED_COLOR = "#9B5B3F";
+const TIMEPOINT_ORDER = ["known1", "known2"];
+const ACQUIRED_COLOR = "#A9D8EF";      // baby blue
+const NOT_ACQUIRED_COLOR = "#F5C2D6";  // baby pink
+const T1_COLOR = "#BFE3B0";            // pastel sage
+const T2_COLOR = "#D3C6F0";            // baby purple
+const CATEGORY_ORDER = [
+  "Animal Sounds", "Animals", "Vehicles", "Toys", "Food and Drink", "Clothing", "Body Parts",
+  "Household Items", "Furniture and Rooms", "Outside", "Places to go", "People",
+  "Games and Routines", "Action Words", "Descriptive Words", "Time", "Pronouns",
+  "Question Words", "Prepositions", "Quantifiers", "Helping Verbs", "Connecting Verbs",
+];
 
 /* ---------- helpers ---------- */
 function parseKnown(v) {
@@ -126,9 +135,6 @@ function parseKnown(v) {
   return ["y", "yes", "true", "1", "x", "known"].includes(s);
 }
 function guessColumn(headers, patterns) {
-  // try each pattern in priority order across all headers, so an earlier
-  // (more specific) pattern always wins over a later, looser one -- e.g.
-  // an exact "word" match should win over "word category" containing "word".
   for (const p of patterns) {
     for (let i = 0; i < headers.length; i++) {
       const h = String(headers[i] || "").toLowerCase().trim();
@@ -141,6 +147,14 @@ function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+function sortCategories(cats) {
+  return cats.slice().sort((a, b) => {
+    const ia = CATEGORY_ORDER.indexOf(a); const ib = CATEGORY_ORDER.indexOf(b);
+    const ra = ia === -1 ? 999 : ia; const rb = ib === -1 ? 999 : ib;
+    if (ra !== rb) return ra - rb;
+    return a.localeCompare(b);
+  });
+}
 
 /* ---------- storage (localStorage -- this is a real standalone page, not a Claude artifact) ---------- */
 const STORE_PREFIX = "sle_";
@@ -168,7 +182,6 @@ function computeChildMetrics(child) {
   const total = words.length;
   const t1Known = words.filter((w) => w.known1);
   const t2Known = words.filter((w) => w.known2);
-  const t2Unknown = words.filter((w) => !w.known2);
   const avgTotal = (list) => {
     const scored = list.filter((w) => w.scores);
     return scored.length ? round2(scored.reduce((s, w) => s + w.scores.total, 0) / scored.length) : 0;
@@ -190,31 +203,32 @@ function computeChildMetrics(child) {
     avgScoreT1Known: avgTotal(t1Known),
     avgScoreT2Known: avgTotal(t2Known),
     ruleAvgT2Known: ruleAvg(t2Known),
-    ruleAvgT2Unknown: ruleAvg(t2Unknown),
+    ruleAvgT2Unknown: ruleAvg(words.filter((w) => !w.known2)),
     ruleAvgT1Known: ruleAvg(t1Known),
     ruleAvgT1Unknown: ruleAvg(words.filter((w) => !w.known1)),
-    categories: [...new Set(words.map((w) => w.category || "Uncategorized"))].sort(),
+    categories: [...new Set(words.map((w) => w.category || "Uncategorized"))],
   };
 }
 
-/* ---------- RTF export ---------- */
-function rtfEscape(s) {
-  return String(s ?? "").replace(/\\/g, "\\\\").replace(/{/g, "\\{").replace(/}/g, "\\}")
-    .split("").map((ch) => { const c = ch.codePointAt(0); return c > 127 ? `\\u${c}?` : ch; }).join("");
+/* ---------- Excel export (SheetJS -- already loaded globally as XLSX) ---------- */
+function wordsToSheetRows(rows) {
+  const header = ["Category", "Word", "IPA", "Known (T1)", "Known (T2)", ...RULE_KEYS.map((k) => RULE_LABELS[k]), "Total"];
+  const body = rows.map((r) => [
+    r.category || "Uncategorized", r.word, r.ipa, r.known1 ? "Yes" : "No", r.known2 ? "Yes" : "No",
+    ...RULE_KEYS.map((k) => (r.scores ? (r.scores[k] === null ? "" : r.scores[k]) : "")),
+    r.scores ? r.scores.total : "",
+  ]);
+  return [header, ...body];
 }
-function buildRtf(childName, rows) {
-  const headers = ["Category", "Word", "IPA", "Known (T1)", "Known (T2)", ...RULE_KEYS.map((k) => RULE_LABELS[k]), "Total"];
-  const colWidths = [1400, 1600, 1900, 900, 900, ...RULE_KEYS.map(() => 1200), 800];
-  let cellDefs = ""; let acc = 0;
-  colWidths.forEach((w) => { acc += w; cellDefs += `\\cellx${acc}`; });
-  const headerRow = `\\trowd\\trgaph70${cellDefs}\n` +
-    headers.map((h) => `\\intbl\\b ${rtfEscape(h)}\\b0\\cell`).join("") + "\\row\n";
-  const bodyRows = rows.map((r) => {
-    const vals = [r.category || "-", r.word, r.ipa, r.known1 ? "Yes" : "No", r.known2 ? "Yes" : "No",
-      ...RULE_KEYS.map((k) => (r.scores?.[k] ?? "-")), r.scores?.total ?? "-"];
-    return `\\trowd\\trgaph70${cellDefs}\n` + vals.map((v) => `\\intbl ${rtfEscape(v)}\\cell`).join("") + "\\row\n";
-  }).join("");
-  return `{\\rtf1\\ansi\\deff0\n{\\fonttbl{\\f0 Calibri;}}\n\\f0\\fs22\n{\\fs32\\b SoundLE Score Report\\b0\\par}\n{\\fs22 ${rtfEscape(childName)}\\par}\n\\par\n${headerRow}${bodyRows}\n\\par\n{\\fs18\\i Scoring rules: 1pt for 3+ syllables; 1pt for stress on a non-initial syllable; 1pt for a word-final consonant; 1pt per consonant cluster; 1pt per velar; 1pt per liquid/rhotic; 1pt per fricative or affricate; 1pt per voiced fricative/affricate (in addition to the fricative/affricate point).\\par}\n}`;
+function downloadChildXlsx(child) {
+  const rows = wordsToSheetRows(child.words || []);
+  const ws = XLSX.utils.aoa_to_sheet(rows);
+  ws["!cols"] = [{ wch: 16 }, { wch: 16 }, { wch: 18 }, { wch: 10 }, { wch: 10 },
+    ...RULE_KEYS.map(() => ({ wch: 14 })), { wch: 8 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "SoundLE");
+  const out = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+  downloadFile(`${child.name.toLowerCase().replace(/\s+/g, "-")}-soundle-data.xlsx`, out, "application/octet-stream");
 }
 function downloadFile(filename, content, mime) {
   const blob = new Blob([content], { type: mime });
@@ -231,31 +245,63 @@ function svgEl(tag, attrs) {
   for (const k in attrs) el.setAttribute(k, attrs[k]);
   return el;
 }
+function computeTicks(maxVal, tickCount) {
+  tickCount = tickCount || 4;
+  if (maxVal <= 0) return [0, 1];
+  const rawStep = maxVal / tickCount;
+  const mag = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const norm = rawStep / mag;
+  let niceStep;
+  if (norm < 1.5) niceStep = 1 * mag; else if (norm < 3) niceStep = 2 * mag;
+  else if (norm < 7) niceStep = 5 * mag; else niceStep = 10 * mag;
+  if (niceStep < 1 && Number.isInteger(maxVal)) niceStep = 1; // keep integer counts on whole ticks
+  const ticks = [];
+  for (let v = 0; v <= maxVal + 1e-9; v += niceStep) ticks.push(round2(v));
+  if (ticks[ticks.length - 1] < maxVal) ticks.push(round2(ticks[ticks.length - 1] + niceStep));
+  return ticks;
+}
+function drawYAxis(svg, ticks, maxY, padL, padT, padB, H, W, padR) {
+  ticks.forEach((t) => {
+    const y = H - padB - ((H - padT - padB) * t) / maxY;
+    svg.appendChild(svgEl("line", { x1: padL, y1: y, x2: W - padR, y2: y, stroke: "#F0E6D2", "stroke-width": 1 }));
+    const lbl = svgEl("text", { x: padL - 6, y: y + 3, "font-size": 9.5, "text-anchor": "end", fill: "#9C8F7A" });
+    lbl.textContent = t;
+    svg.appendChild(lbl);
+  });
+}
 function barChart(container, data, xKey, yKey, color) {
   container.innerHTML = "";
-  const W = container.clientWidth || 480, H = 240, padL = 36, padB = 34, padT = 14, padR = 12;
+  const W = container.clientWidth || 480, H = 250, padL = 40, padB = 34, padT = 14, padR = 12;
   const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
-  const maxY = Math.max(1, ...data.map((d) => d[yKey]));
+  const rawMax = Math.max(1, ...data.map((d) => d[yKey]));
+  const ticks = computeTicks(rawMax);
+  const maxY = ticks[ticks.length - 1];
+  drawYAxis(svg, ticks, maxY, padL, padT, padB, H, W, padR);
   const bw = (W - padL - padR) / data.length;
   data.forEach((d, i) => {
+    const barColor = Array.isArray(color) ? color[i % color.length] : color;
     const h = ((H - padT - padB) * d[yKey]) / maxY;
     const x = padL + i * bw + bw * 0.15;
     const y = H - padB - h;
-    svg.appendChild(svgEl("rect", { x, y, width: bw * 0.7, height: h, fill: color, rx: 3 }));
-    const lbl = svgEl("text", { x: x + bw * 0.35, y: H - padB + 14, "font-size": 10, "text-anchor": "middle", fill: "#8A8478" });
+    svg.appendChild(svgEl("rect", { x, y, width: bw * 0.7, height: h, fill: barColor, rx: 3 }));
+    const lbl = svgEl("text", { x: x + bw * 0.35, y: H - padB + 14, "font-size": 10, "text-anchor": "middle", fill: "#9C8F7A" });
     lbl.textContent = d[xKey]; svg.appendChild(lbl);
-    const vlbl = svgEl("text", { x: x + bw * 0.35, y: y - 4, "font-size": 10, "text-anchor": "middle", fill: "#5C574C" });
+    const vlbl = svgEl("text", { x: x + bw * 0.35, y: y - 4, "font-size": 10, "text-anchor": "middle", fill: "#6B6252" });
     vlbl.textContent = d[yKey]; svg.appendChild(vlbl);
   });
-  svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: "#E4DFD5" }));
+  svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: "#DCCFB4" }));
+  svg.appendChild(svgEl("line", { x1: padL, y1: padT, x2: padL, y2: H - padB, stroke: "#DCCFB4" }));
   container.appendChild(svg);
 }
 function lineChart(container, data, xKey, series) {
   container.innerHTML = "";
-  const W = container.clientWidth || 480, H = 260, padL = 36, padB = 34, padT = 14, padR = 12;
+  const W = container.clientWidth || 480, H = 260, padL = 40, padB = 34, padT = 14, padR = 12;
   const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
-  let maxY = 1;
-  series.forEach((s) => data.forEach((d) => { if (d[s.key] > maxY) maxY = d[s.key]; }));
+  let rawMax = 1;
+  series.forEach((s) => data.forEach((d) => { if (d[s.key] > rawMax) rawMax = d[s.key]; }));
+  const ticks = computeTicks(rawMax);
+  const maxY = ticks[ticks.length - 1];
+  drawYAxis(svg, ticks, maxY, padL, padT, padB, H, W, padR);
   const stepX = data.length > 1 ? (W - padL - padR) / (data.length - 1) : 0;
   series.forEach((s) => {
     let points = data.map((d, i) => {
@@ -272,48 +318,104 @@ function lineChart(container, data, xKey, series) {
   });
   data.forEach((d, i) => {
     const x = padL + i * stepX;
-    const lbl = svgEl("text", { x, y: H - padB + 14, "font-size": 10, "text-anchor": "middle", fill: "#8A8478" });
+    const lbl = svgEl("text", { x, y: H - padB + 14, "font-size": 10, "text-anchor": "middle", fill: "#9C8F7A" });
     lbl.textContent = d[xKey]; svg.appendChild(lbl);
   });
-  svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: "#E4DFD5" }));
-  svg.appendChild(svgEl("line", { x1: padL, y1: padT, x2: padL, y2: H - padB, stroke: "#E4DFD5" }));
+  svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: "#DCCFB4" }));
+  svg.appendChild(svgEl("line", { x1: padL, y1: padT, x2: padL, y2: H - padB, stroke: "#DCCFB4" }));
   container.appendChild(svg);
 }
-/* grouped bar chart: labels = x categories, series = [{name, color, values}] aligned to labels */
+/* grouped bar chart: labels = x categories, series = [{name, color, values, opacity}] aligned to labels */
 function groupedBarChart(container, labels, series) {
   container.innerHTML = "";
-  const W = container.clientWidth || 480, H = 260, padL = 36, padB = 46, padT = 14, padR = 12;
+  const W = container.clientWidth || 480, H = 270, padL = 40, padB = 46, padT = 14, padR = 12;
   const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
-  let maxY = 1;
-  series.forEach((s) => s.values.forEach((v) => { if (v > maxY) maxY = v; }));
+  let rawMax = 1;
+  series.forEach((s) => s.values.forEach((v) => { if (v > rawMax) rawMax = v; }));
+  const ticks = computeTicks(rawMax);
+  const maxY = ticks[ticks.length - 1];
+  drawYAxis(svg, ticks, maxY, padL, padT, padB, H, W, padR);
   const groupW = (W - padL - padR) / labels.length;
-  const barW = (groupW * 0.72) / series.length;
+  const barW = (groupW * 0.76) / series.length;
   labels.forEach((label, i) => {
     series.forEach((s, si) => {
       const v = s.values[i] || 0;
       const h = ((H - padT - padB) * v) / maxY;
-      const x = padL + i * groupW + groupW * 0.14 + si * barW;
+      const x = padL + i * groupW + groupW * 0.12 + si * barW;
       const y = H - padB - h;
-      svg.appendChild(svgEl("rect", { x, y, width: barW * 0.86, height: h, fill: s.color, rx: 2 }));
+      svg.appendChild(svgEl("rect", {
+        x, y, width: barW * 0.86, height: h, fill: s.color, rx: 2,
+        "fill-opacity": s.opacity != null ? s.opacity : 1,
+      }));
     });
     const lbl = svgEl("text", {
       x: padL + i * groupW + groupW / 2, y: H - padB + 14, "font-size": 9.5,
-      "text-anchor": "middle", fill: "#8A8478",
+      "text-anchor": "middle", fill: "#9C8F7A",
     });
     lbl.textContent = label;
     svg.appendChild(lbl);
   });
-  svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: "#E4DFD5" }));
+  svg.appendChild(svgEl("line", { x1: padL, y1: H - padB, x2: W - padR, y2: H - padB, stroke: "#DCCFB4" }));
+  svg.appendChild(svgEl("line", { x1: padL, y1: padT, x2: padL, y2: H - padB, stroke: "#DCCFB4" }));
   container.appendChild(svg);
 }
 function renderLegend(container, items) {
   const row = document.createElement("div"); row.className = "legend-row";
   items.forEach((it) => {
     const chip = document.createElement("div"); chip.className = "legend-chip";
-    chip.innerHTML = `<span class="legend-dot" style="background:${it.color}"></span>${esc(it.name)}`;
+    chip.innerHTML = `<span class="legend-dot" style="background:${it.color};opacity:${it.opacity != null ? it.opacity : 1}"></span>${esc(it.name)}`;
     row.appendChild(chip);
   });
   container.appendChild(row);
+}
+
+/* ---------- category accordion (click a category to show/hide its words) ---------- */
+function buildWordsTableHtml(rows) {
+  const rowsHtml = rows.map((r) => `
+    <tr>
+      <td>${esc(r.word)}</td>
+      <td class="muted">${esc(r.ipa)}</td>
+      <td class="center">${r.known1 ? '<span class="chip chip-known">yes</span>' : '<span class="chip chip-unknown">no</span>'}</td>
+      <td class="center">${r.known2 ? '<span class="chip chip-known">yes</span>' : '<span class="chip chip-unknown">no</span>'}</td>
+      ${RULE_KEYS.map((k) => `<td class="center muted">${r.scores ? (r.scores[k] === null ? "\u2013" : r.scores[k]) : "\u2013"}</td>`).join("")}
+      <td class="center bold">${r.scores ? r.scores.total : "\u2013"}</td>
+    </tr>
+  `).join("");
+  return `
+    <table class="data-table">
+      <thead><tr>
+        <th>Word</th><th>IPA</th><th class="center">Known T1</th><th class="center">Known T2</th>
+        ${RULE_KEYS.map((k) => `<th class="center">${RULE_LABELS[k]}</th>`).join("")}
+        <th class="center">Total</th>
+      </tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>
+  `;
+}
+function renderCategoryAccordion(rows, openSet) {
+  const wrap = document.createElement("div");
+  const groups = {};
+  rows.forEach((r) => { const c = r.category || "Uncategorized"; (groups[c] = groups[c] || []).push(r); });
+  const cats = sortCategories(Object.keys(groups));
+  cats.forEach((cat) => {
+    const groupRows = groups[cat];
+    const isOpen = openSet.has(cat);
+    const section = document.createElement("div"); section.className = "cat-group";
+    const header = document.createElement("button"); header.className = "cat-header";
+    header.innerHTML = `<span class="cat-chevron">${isOpen ? "\u25be" : "\u25b8"}</span><span class="cat-name">${esc(cat)}</span><span class="cat-count">${groupRows.length}</span>`;
+    header.onclick = () => {
+      if (openSet.has(cat)) openSet.delete(cat); else openSet.add(cat);
+      render();
+    };
+    section.appendChild(header);
+    if (isOpen) {
+      const tableWrap = document.createElement("div"); tableWrap.className = "table-wrap cat-table";
+      tableWrap.innerHTML = buildWordsTableHtml(groupRows);
+      section.appendChild(tableWrap);
+    }
+    wrap.appendChild(section);
+  });
+  return wrap;
 }
 
 /* ---------- app state ---------- */
@@ -327,12 +429,12 @@ const state = {
   targetChildName: "",
   targetChildIsNew: true,
   saveMsg: "",
-  reviewCategoryFilter: "__all__",
-  childCategoryFilter: "__all__",
-  childFeatureTimepoint: "known2",
-  visibleRules: new Set(RULE_KEYS),
+  reviewOpenCategories: new Set(),
+  childOpenCategories: new Set(),
+  childOpenCategoriesFor: null,
+  childFeatureTimepoints: new Set(["known2"]),
   compareSelected: new Set(),
-  compareFeatureTimepoint: "known2",
+  compareFeatureTimepoints: new Set(["known2"]),
 };
 
 const root = document.getElementById("app");
@@ -364,11 +466,10 @@ function renderSidebar() {
   `;
   const btn = document.createElement("button");
   btn.className = "btn-primary new-btn";
-  btn.textContent = "+ New assessment";
+  btn.textContent = "+ New Data";
   btn.onclick = () => {
     state.screen = "upload-start"; state.selectedChildId = null; state.rawSheet = null;
     state.scoredRows = []; state.saveMsg = ""; state.targetChildName = ""; state.targetChildIsNew = true;
-    state.reviewCategoryFilter = "__all__";
     render();
   };
   sb.appendChild(btn);
@@ -377,7 +478,7 @@ function renderSidebar() {
     const compareBtn = document.createElement("button");
     compareBtn.className = "btn-secondary new-btn";
     compareBtn.style.margin = "0 16px 12px";
-    compareBtn.textContent = "Compare children";
+    compareBtn.textContent = "Data Comparison";
     compareBtn.onclick = () => {
       if (state.compareSelected.size === 0) state.childrenIndex.forEach((c) => state.compareSelected.add(c.id));
       state.screen = "compare"; render();
@@ -399,7 +500,6 @@ function renderSidebar() {
     b.textContent = c.name;
     b.onclick = () => {
       state.selectedChildId = c.id; state.screen = "child";
-      state.childCategoryFilter = "__all__"; state.childFeatureTimepoint = "known2";
       render();
     };
     list.appendChild(b);
@@ -499,7 +599,7 @@ function renderColumnMap() {
   btn.onclick = () => {
     if (state.colMap.word < 0 || state.colMap.ipa < 0) return;
     state.scoredRows = computeScoredRows();
-    state.reviewCategoryFilter = "__all__";
+    state.reviewOpenCategories = new Set(state.scoredRows.map((r) => r.category || "Uncategorized"));
     state.screen = "review"; render();
   };
   wrap.appendChild(btn);
@@ -519,10 +619,6 @@ function computeScoredRows() {
   }).filter((r) => r.word);
 }
 
-function reviewCategories() {
-  return [...new Set(state.scoredRows.map((r) => r.category || "Uncategorized"))].sort();
-}
-
 function renderReview() {
   const d = document.createElement("div"); d.className = "panel wide-panel";
   const known1Count = state.scoredRows.filter((r) => r.known1).length;
@@ -535,20 +631,6 @@ function renderReview() {
     </div>
   `;
   const controls = document.createElement("div"); controls.className = "review-controls";
-
-  const catField = document.createElement("div");
-  catField.innerHTML = `<div class="field-label">Category</div>`;
-  const catSel = document.createElement("select"); catSel.className = "select";
-  const allOpt = document.createElement("option"); allOpt.value = "__all__"; allOpt.textContent = "All categories";
-  catSel.appendChild(allOpt);
-  reviewCategories().forEach((c) => {
-    const o = document.createElement("option"); o.value = c; o.textContent = c;
-    if (state.reviewCategoryFilter === c) o.selected = true;
-    catSel.appendChild(o);
-  });
-  catSel.value = state.reviewCategoryFilter;
-  catSel.onchange = () => { state.reviewCategoryFilter = catSel.value; render(); };
-  catField.appendChild(catSel);
 
   const childField = document.createElement("div");
   childField.innerHTML = `<div class="field-label">Child</div>`;
@@ -582,46 +664,15 @@ function renderReview() {
 
   const saveBtn = document.createElement("button"); saveBtn.className = "btn-primary"; saveBtn.textContent = "Save assessment";
   saveBtn.onclick = () => handleSave(saveBtn);
-  const exportBtn = document.createElement("button"); exportBtn.className = "btn-secondary"; exportBtn.textContent = "Export Word doc";
-  exportBtn.onclick = () => downloadFile(
-    `${state.targetChildName || "soundle"}.rtf`,
-    buildRtf(state.targetChildName || "Untitled", state.scoredRows), "application/rtf"
-  );
 
-  controls.appendChild(catField); controls.appendChild(childField); controls.appendChild(saveBtn); controls.appendChild(exportBtn);
+  controls.appendChild(childField); controls.appendChild(saveBtn);
   header.appendChild(controls);
   d.appendChild(header);
 
   const msg = document.createElement("div"); msg.className = "save-msg"; msg.textContent = state.saveMsg;
   d.appendChild(msg);
 
-  const visibleRows = state.reviewCategoryFilter === "__all__"
-    ? state.scoredRows
-    : state.scoredRows.filter((r) => (r.category || "Uncategorized") === state.reviewCategoryFilter);
-
-  const tableWrap = document.createElement("div"); tableWrap.className = "table-wrap";
-  let rowsHtml = visibleRows.map((r) => `
-    <tr>
-      <td class="muted">${esc(r.category || "-")}</td>
-      <td>${esc(r.word)}</td>
-      <td class="muted">${esc(r.ipa)}</td>
-      <td>${r.known1 ? '<span class="chip chip-known">T1</span>' : '<span class="chip chip-unknown">T1</span>'}</td>
-      <td>${r.known2 ? '<span class="chip chip-known">T2</span>' : '<span class="chip chip-unknown">T2</span>'}</td>
-      ${RULE_KEYS.map((k) => `<td class="center muted">${r.scores ? (r.scores[k] === null ? "\u2013" : r.scores[k]) : "\u2013"}</td>`).join("")}
-      <td class="center bold">${r.scores ? r.scores.total : "\u2013"}</td>
-    </tr>
-  `).join("");
-  tableWrap.innerHTML = `
-    <table class="data-table">
-      <thead><tr>
-        <th>Category</th><th>Word</th><th>IPA</th><th class="center">Known T1</th><th class="center">Known T2</th>
-        ${RULE_KEYS.map((k) => `<th class="center">${RULE_LABELS[k]}</th>`).join("")}
-        <th class="center">Total</th>
-      </tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>
-  `;
-  d.appendChild(tableWrap);
+  d.appendChild(renderCategoryAccordion(state.scoredRows, state.reviewOpenCategories));
   return d;
 }
 
@@ -672,17 +723,16 @@ function deleteChild(id) {
   render();
 }
 
-function downloadChildJson(child) {
-  downloadFile(
-    `${child.name.toLowerCase().replace(/\s+/g, "-")}-soundle-data.json`,
-    JSON.stringify(child, null, 2), "application/json"
-  );
-}
-
 function renderChild() {
   const child = loadChild(state.selectedChildId);
   const d = document.createElement("div"); d.className = "panel wide-panel";
   if (!child) { d.innerHTML = `<div class="sub">Child not found.</div>`; return d; }
+
+  if (state.childOpenCategoriesFor !== child.id) {
+    const m0 = computeChildMetrics(child);
+    state.childOpenCategories = new Set(m0.categories);
+    state.childOpenCategoriesFor = child.id;
+  }
 
   const header = document.createElement("div"); header.className = "review-header";
   const titleWrap = document.createElement("div");
@@ -691,13 +741,11 @@ function renderChild() {
   const actions = document.createElement("div"); actions.className = "review-controls";
   const renameBtn = document.createElement("button"); renameBtn.className = "btn-secondary"; renameBtn.textContent = "Rename";
   renameBtn.onclick = () => renameChild(child.id);
-  const downloadBtn = document.createElement("button"); downloadBtn.className = "btn-secondary"; downloadBtn.textContent = "Download data";
-  downloadBtn.onclick = () => downloadChildJson(child);
-  const exportBtn = document.createElement("button"); exportBtn.className = "btn-secondary"; exportBtn.textContent = "Export Word doc";
-  exportBtn.onclick = () => downloadFile(`${child.name}.rtf`, buildRtf(child.name, child.words || []), "application/rtf");
+  const downloadBtn = document.createElement("button"); downloadBtn.className = "btn-secondary"; downloadBtn.textContent = "Download Data";
+  downloadBtn.onclick = () => downloadChildXlsx(child);
   const deleteBtn = document.createElement("button"); deleteBtn.className = "btn-secondary"; deleteBtn.textContent = "Delete";
   deleteBtn.onclick = () => deleteChild(child.id);
-  actions.appendChild(renameBtn); actions.appendChild(downloadBtn); actions.appendChild(exportBtn); actions.appendChild(deleteBtn);
+  actions.appendChild(renameBtn); actions.appendChild(downloadBtn); actions.appendChild(deleteBtn);
   header.appendChild(titleWrap); header.appendChild(actions);
   d.appendChild(header);
 
@@ -718,7 +766,7 @@ function renderChild() {
 
   const chartsRow = document.createElement("div"); chartsRow.className = "charts-row";
   const card1 = document.createElement("div"); card1.className = "card";
-  card1.innerHTML = `<div class="card-title">Words known: timepoint 1 vs 2</div><div class="chart-box" id="chart-known"></div>`;
+  card1.innerHTML = `<div class="card-title">Words known: timepoint 1 vs 2</div><div class="chart-box" id="chart-known"></div><div id="known-legend"></div>`;
   const card2 = document.createElement("div"); card2.className = "card";
   card2.innerHTML = `<div class="card-title">Avg complexity of known words</div><div class="chart-box" id="chart-avg"></div>`;
   chartsRow.appendChild(card1); chartsRow.appendChild(card2);
@@ -727,78 +775,56 @@ function renderChild() {
   const featureCard = document.createElement("div"); featureCard.className = "card full-card";
   featureCard.innerHTML = `
     <div class="card-title">Sound features: acquired vs not yet acquired</div>
-    <div class="card-sub">Average points per word, by rule, split by whether the word is known.</div>
+    <div class="card-sub">Average points per word, by rule. Select one or both timepoints to compare.</div>
     <div class="chip-row" id="tp-toggle"></div>
     <div class="chart-box" id="chart-features"></div>
     <div id="feature-legend"></div>
   `;
   d.appendChild(featureCard);
   const tpToggle = featureCard.querySelector("#tp-toggle");
-  ["known1", "known2"].forEach((tp) => {
+  TIMEPOINT_ORDER.forEach((tp) => {
     const chip = document.createElement("button");
-    chip.className = "rule-chip" + (state.childFeatureTimepoint === tp ? " active" : "");
+    chip.className = "rule-chip" + (state.childFeatureTimepoints.has(tp) ? " active" : "");
     chip.textContent = TIMEPOINT_LABELS[tp];
     chip.style.setProperty("--chip-color", "#5C3A21");
-    chip.onclick = () => { state.childFeatureTimepoint = tp; render(); };
+    chip.onclick = () => {
+      if (state.childFeatureTimepoints.has(tp)) {
+        if (state.childFeatureTimepoints.size > 1) state.childFeatureTimepoints.delete(tp);
+      } else state.childFeatureTimepoints.add(tp);
+      render();
+    };
     tpToggle.appendChild(chip);
   });
 
-  const catCard = document.createElement("div"); catCard.className = "full-card";
-  const catHeader = document.createElement("div"); catHeader.className = "row-inline"; catHeader.style.marginBottom = "12px";
-  const catLbl = document.createElement("div"); catLbl.className = "field-label"; catLbl.style.marginRight = "8px"; catLbl.textContent = "Category";
-  const catSel = document.createElement("select"); catSel.className = "select"; catSel.style.width = "220px";
-  const allOpt = document.createElement("option"); allOpt.value = "__all__"; allOpt.textContent = "All categories";
-  catSel.appendChild(allOpt);
-  m.categories.forEach((c) => {
-    const o = document.createElement("option"); o.value = c; o.textContent = c;
-    if (state.childCategoryFilter === c) o.selected = true;
-    catSel.appendChild(o);
-  });
-  catSel.value = state.childCategoryFilter;
-  catSel.onchange = () => { state.childCategoryFilter = catSel.value; render(); };
-  catHeader.appendChild(catLbl); catHeader.appendChild(catSel);
-  catCard.appendChild(catHeader);
-
-  const visibleWords = state.childCategoryFilter === "__all__"
-    ? child.words
-    : child.words.filter((w) => (w.category || "Uncategorized") === state.childCategoryFilter);
-
-  const tableWrap = document.createElement("div"); tableWrap.className = "table-wrap";
-  const rowsHtml = visibleWords.map((r) => `
-    <tr>
-      <td class="muted">${esc(r.category || "-")}</td>
-      <td>${esc(r.word)}</td>
-      <td class="muted">${esc(r.ipa)}</td>
-      <td class="center">${r.known1 ? '<span class="chip chip-known">yes</span>' : '<span class="chip chip-unknown">no</span>'}</td>
-      <td class="center">${r.known2 ? '<span class="chip chip-known">yes</span>' : '<span class="chip chip-unknown">no</span>'}</td>
-      <td class="center bold">${r.scores ? r.scores.total : "\u2013"}</td>
-    </tr>
-  `).join("");
-  tableWrap.innerHTML = `
-    <table class="data-table">
-      <thead><tr><th>Category</th><th>Word</th><th>IPA</th><th class="center">Known T1</th><th class="center">Known T2</th><th class="center">Total</th></tr></thead>
-      <tbody>${rowsHtml}</tbody>
-    </table>
-  `;
-  catCard.appendChild(tableWrap);
-  d.appendChild(catCard);
+  const catHeading = document.createElement("div"); catHeading.className = "h2"; catHeading.style.fontSize = "18px"; catHeading.style.marginTop = "8px";
+  catHeading.textContent = "Words by category";
+  d.appendChild(catHeading);
+  d.appendChild(renderCategoryAccordion(child.words, state.childOpenCategories));
 
   requestAnimationFrame(() => {
     barChart(document.getElementById("chart-known"),
       [{ tp: "Timepoint 1", count: m.t1KnownCount }, { tp: "Timepoint 2", count: m.t2KnownCount }],
-      "tp", "count", ACQUIRED_COLOR);
+      "tp", "count", [T1_COLOR, T2_COLOR]);
+    renderLegend(document.getElementById("known-legend"), [
+      { name: "Timepoint 1", color: T1_COLOR }, { name: "Timepoint 2", color: T2_COLOR },
+    ]);
     barChart(document.getElementById("chart-avg"),
       [{ tp: "Timepoint 1", avg: m.avgScoreT1Known }, { tp: "Timepoint 2", avg: m.avgScoreT2Known }],
       "tp", "avg", "#B8863B");
-    const known = state.childFeatureTimepoint === "known1" ? m.ruleAvgT1Known : m.ruleAvgT2Known;
-    const unknown = state.childFeatureTimepoint === "known1" ? m.ruleAvgT1Unknown : m.ruleAvgT2Unknown;
-    groupedBarChart(document.getElementById("chart-features"), RULE_KEYS.map((k) => RULE_LABELS[k]), [
-      { name: "Acquired", color: ACQUIRED_COLOR, values: RULE_KEYS.map((k) => known[k]) },
-      { name: "Not yet", color: NOT_ACQUIRED_COLOR, values: RULE_KEYS.map((k) => unknown[k]) },
-    ]);
-    renderLegend(document.getElementById("feature-legend"), [
-      { name: "Acquired", color: ACQUIRED_COLOR }, { name: "Not yet acquired", color: NOT_ACQUIRED_COLOR },
-    ]);
+    const selectedTps = TIMEPOINT_ORDER.filter((tp) => state.childFeatureTimepoints.has(tp));
+    const series = []; const legend = [];
+    selectedTps.forEach((tp, idx) => {
+      const opacity = idx === 0 ? 1 : 0.55;
+      const known = tp === "known1" ? m.ruleAvgT1Known : m.ruleAvgT2Known;
+      const unknown = tp === "known1" ? m.ruleAvgT1Unknown : m.ruleAvgT2Unknown;
+      const suffix = selectedTps.length > 1 ? ` (${TIMEPOINT_LABELS[tp]})` : "";
+      series.push({ name: `Acquired${suffix}`, color: ACQUIRED_COLOR, opacity, values: RULE_KEYS.map((k) => known[k]) });
+      series.push({ name: `Not yet${suffix}`, color: NOT_ACQUIRED_COLOR, opacity, values: RULE_KEYS.map((k) => unknown[k]) });
+      legend.push({ name: `Acquired${suffix}`, color: ACQUIRED_COLOR, opacity });
+      legend.push({ name: `Not yet acquired${suffix}`, color: NOT_ACQUIRED_COLOR, opacity });
+    });
+    groupedBarChart(document.getElementById("chart-features"), RULE_KEYS.map((k) => RULE_LABELS[k]), series);
+    renderLegend(document.getElementById("feature-legend"), legend);
   });
 
   return d;
@@ -806,8 +832,7 @@ function renderChild() {
 
 function renderCompare() {
   const d = document.createElement("div"); d.className = "panel wide-panel";
-  d.innerHTML = `<div class="h2">Compare children</div>
-    <p class="sub">Toggle children in or out to compile averages, acquisition trends, and feature breakdowns across the group.</p>`;
+  d.innerHTML = `<div class="h2">Data Comparison</div>`;
 
   const toggleRow = document.createElement("div"); toggleRow.className = "chip-row";
   const selectAllBtn = document.createElement("button"); selectAllBtn.className = "rule-chip";
@@ -855,14 +880,14 @@ function renderCompare() {
   const statsGrid = document.createElement("div"); statsGrid.className = "col-grid"; statsGrid.style.marginBottom = "24px";
   const stat = (label, value) => `<div class="card"><div class="card-sub" style="margin-bottom:4px">${esc(label)}</div><div class="h2" style="margin:0">${value}</div></div>`;
   statsGrid.innerHTML =
-    stat("Children compared", selectedChildren.length) +
+    stat("Data Selected", selectedChildren.length) +
     stat("Avg % known, T1 \u2192 T2", `${combined.t1KnownPct}% \u2192 ${combined.t2KnownPct}%`) +
     stat("Avg complexity, known (T2)", combined.avgScoreT2Known);
   d.appendChild(statsGrid);
 
   const chartsRow = document.createElement("div"); chartsRow.className = "charts-row";
   const card1 = document.createElement("div"); card1.className = "card";
-  card1.innerHTML = `<div class="card-title">Avg % words known: T1 vs T2</div><div class="chart-box" id="cmp-chart-known"></div>`;
+  card1.innerHTML = `<div class="card-title">Avg % words known: T1 vs T2</div><div class="chart-box" id="cmp-chart-known"></div><div id="cmp-known-legend"></div>`;
   const card2 = document.createElement("div"); card2.className = "card";
   card2.innerHTML = `<div class="card-title">Avg complexity of known words</div><div class="chart-box" id="cmp-chart-avg"></div>`;
   chartsRow.appendChild(card1); chartsRow.appendChild(card2);
@@ -877,12 +902,17 @@ function renderCompare() {
   `;
   d.appendChild(featureCard);
   const tpToggle = featureCard.querySelector("#cmp-tp-toggle");
-  ["known1", "known2"].forEach((tp) => {
+  TIMEPOINT_ORDER.forEach((tp) => {
     const chip = document.createElement("button");
-    chip.className = "rule-chip" + (state.compareFeatureTimepoint === tp ? " active" : "");
+    chip.className = "rule-chip" + (state.compareFeatureTimepoints.has(tp) ? " active" : "");
     chip.textContent = TIMEPOINT_LABELS[tp];
     chip.style.setProperty("--chip-color", "#5C3A21");
-    chip.onclick = () => { state.compareFeatureTimepoint = tp; render(); };
+    chip.onclick = () => {
+      if (state.compareFeatureTimepoints.has(tp)) {
+        if (state.compareFeatureTimepoints.size > 1) state.compareFeatureTimepoints.delete(tp);
+      } else state.compareFeatureTimepoints.add(tp);
+      render();
+    };
     tpToggle.appendChild(chip);
   });
 
@@ -907,21 +937,29 @@ function renderCompare() {
   requestAnimationFrame(() => {
     barChart(document.getElementById("cmp-chart-known"),
       [{ tp: "Timepoint 1", pct: combined.t1KnownPct }, { tp: "Timepoint 2", pct: combined.t2KnownPct }],
-      "tp", "pct", ACQUIRED_COLOR);
+      "tp", "pct", [T1_COLOR, T2_COLOR]);
+    renderLegend(document.getElementById("cmp-known-legend"), [
+      { name: "Timepoint 1", color: T1_COLOR }, { name: "Timepoint 2", color: T2_COLOR },
+    ]);
     barChart(document.getElementById("cmp-chart-avg"),
       [{ tp: "Timepoint 1", avg: combined.avgScoreT1Known }, { tp: "Timepoint 2", avg: combined.avgScoreT2Known }],
       "tp", "avg", "#B8863B");
-    const knownKey = state.compareFeatureTimepoint === "known1" ? "ruleAvgT1Known" : "ruleAvgT2Known";
-    const unknownKey = state.compareFeatureTimepoint === "known1" ? "ruleAvgT1Unknown" : "ruleAvgT2Unknown";
-    const knownAvgs = RULE_KEYS.map((k) => avg(metrics.map((m) => m[knownKey][k])));
-    const unknownAvgs = RULE_KEYS.map((k) => avg(metrics.map((m) => m[unknownKey][k])));
-    groupedBarChart(document.getElementById("cmp-chart-features"), RULE_KEYS.map((k) => RULE_LABELS[k]), [
-      { name: "Acquired", color: ACQUIRED_COLOR, values: knownAvgs },
-      { name: "Not yet", color: NOT_ACQUIRED_COLOR, values: unknownAvgs },
-    ]);
-    renderLegend(document.getElementById("cmp-feature-legend"), [
-      { name: "Acquired", color: ACQUIRED_COLOR }, { name: "Not yet acquired", color: NOT_ACQUIRED_COLOR },
-    ]);
+    const selectedTps = TIMEPOINT_ORDER.filter((tp) => state.compareFeatureTimepoints.has(tp));
+    const series = []; const legend = [];
+    selectedTps.forEach((tp, idx) => {
+      const opacity = idx === 0 ? 1 : 0.55;
+      const knownKey = tp === "known1" ? "ruleAvgT1Known" : "ruleAvgT2Known";
+      const unknownKey = tp === "known1" ? "ruleAvgT1Unknown" : "ruleAvgT2Unknown";
+      const knownAvgs = RULE_KEYS.map((k) => avg(metrics.map((m) => m[knownKey][k])));
+      const unknownAvgs = RULE_KEYS.map((k) => avg(metrics.map((m) => m[unknownKey][k])));
+      const suffix = selectedTps.length > 1 ? ` (${TIMEPOINT_LABELS[tp]})` : "";
+      series.push({ name: `Acquired${suffix}`, color: ACQUIRED_COLOR, opacity, values: knownAvgs });
+      series.push({ name: `Not yet${suffix}`, color: NOT_ACQUIRED_COLOR, opacity, values: unknownAvgs });
+      legend.push({ name: `Acquired${suffix}`, color: ACQUIRED_COLOR, opacity });
+      legend.push({ name: `Not yet acquired${suffix}`, color: NOT_ACQUIRED_COLOR, opacity });
+    });
+    groupedBarChart(document.getElementById("cmp-chart-features"), RULE_KEYS.map((k) => RULE_LABELS[k]), series);
+    renderLegend(document.getElementById("cmp-feature-legend"), legend);
   });
 
   return d;

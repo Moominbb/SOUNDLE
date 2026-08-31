@@ -105,9 +105,21 @@ button { font-family: inherit; }
 .history-row { padding: 12px 18px; border-bottom: 1px solid #F0E6D2; display: flex; justify-content: space-between; font-size: 13px; }
 .history-row:last-child { border-bottom: none; }
 
-.legend-row { display: flex; gap: 16px; margin-top: 8px; }
+.legend-row { display: flex; gap: 16px; margin-top: 8px; flex-wrap: wrap; }
 .legend-chip { font-size: 12px; color: #6B6252; display: flex; align-items: center; gap: 6px; }
 .legend-dot { width: 9px; height: 9px; border-radius: 999px; display: inline-block; }
+
+.cat-group { margin-bottom: 8px; }
+.cat-header {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  background: #FBF7EF; border: 1px solid #E6DCC8; border-radius: 8px;
+  padding: 10px 14px; font-size: 14px; font-weight: 500; color: #4A4234; cursor: pointer;
+}
+.cat-header:hover { background: #F0E6D2; }
+.cat-chevron { color: #9C8F7A; font-size: 11px; width: 10px; }
+.cat-name { flex: 1; }
+.cat-count { font-size: 12px; color: #9C8F7A; font-weight: 400; }
+.cat-table { margin-top: 6px; margin-bottom: 4px; }
 
 @media (max-width: 800px) {
   #app { flex-direction: column; }
