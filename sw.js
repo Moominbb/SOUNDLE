@@ -1,4 +1,4 @@
-const CACHE_NAME = "word-complexity-v1";
+const CACHE_NAME = "soundle-v2";
 const ASSETS = [
   "./",
   "./index.html",
