@@ -122,10 +122,10 @@ const NOT_ACQUIRED_COLOR = "#F5C2D6";  // baby pink
 const T1_COLOR = "#BFE3B0";            // pastel sage
 const T2_COLOR = "#D3C6F0";            // baby purple
 const CATEGORY_ORDER = [
-  "Animal Sounds", "Animals", "Vehicles", "Toys", "Food and Drink", "Clothing", "Body Parts",
-  "Household Items", "Furniture and Rooms", "Outside", "Places to go", "People",
+  "Animal sounds", "Animals", "Vehicles", "Toys", "Food and Drink", "Clothing", "Body Parts",
+  "Household items", "Furniture and Rooms", "Outside", "Places to go", "People",
   "Games and Routines", "Action Words", "Descriptive Words", "Time", "Pronouns",
-  "Question Words", "Prepositions", "Quantifiers", "Helping Verbs", "Connecting Verbs",
+  "Question words", "Prepositions", "Quantifiers", "Helping Verbs", "Connecting words",
 ];
 
 /* ---------- helpers ---------- */
@@ -134,9 +134,11 @@ function parseKnown(v) {
   const s = String(v).trim().toLowerCase();
   return ["y", "yes", "true", "1", "x", "known"].includes(s);
 }
-function guessColumn(headers, patterns) {
+function guessColumn(headers, patterns, excludeIndices) {
+  const exclude = new Set(excludeIndices || []);
   for (const p of patterns) {
     for (let i = 0; i < headers.length; i++) {
+      if (exclude.has(i)) continue;
       const h = String(headers[i] || "").toLowerCase().trim();
       if (p.test(h)) return i;
     }
@@ -147,9 +149,14 @@ function esc(s) {
   return String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 }
 function round2(n) { return Math.round((n + Number.EPSILON) * 100) / 100; }
+const CATEGORY_ORDER_LC = CATEGORY_ORDER.map((c) => c.toLowerCase());
 function sortCategories(cats) {
+  // case-insensitive lookup so a category still sorts sensibly even if its
+  // casing doesn't exactly match CATEGORY_ORDER (rather than silently falling
+  // to the back of the list)
   return cats.slice().sort((a, b) => {
-    const ia = CATEGORY_ORDER.indexOf(a); const ib = CATEGORY_ORDER.indexOf(b);
+    const ia = CATEGORY_ORDER_LC.indexOf(String(a).toLowerCase());
+    const ib = CATEGORY_ORDER_LC.indexOf(String(b).toLowerCase());
     const ra = ia === -1 ? 999 : ia; const rb = ib === -1 ? 999 : ib;
     if (ra !== rb) return ra - rb;
     return a.localeCompare(b);
@@ -550,11 +557,19 @@ function handleFile(e) {
     const data = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "" });
     const headers = data[0] || [];
     const rows = data.slice(1).filter((r) => r.some((c) => String(c).trim() !== ""));
-    state.colMap.category = guessColumn(headers, [/categ/]);
-    state.colMap.word = guessColumn(headers, [/^word$/, /word/]);
-    state.colMap.ipa = guessColumn(headers, [/ipa/]);
-    state.colMap.known1 = guessColumn(headers, [/timepoint.?1/, /tp.?1/, /t1\b/, /known.*1/]);
-    state.colMap.known2 = guessColumn(headers, [/timepoint.?2/, /tp.?2/, /t2\b/, /known.*2/]);
+    // Guess word/IPA first with the strictest patterns, since those are required;
+    // category and known-columns are guessed afterward and excluded from reusing
+    // whichever column was already claimed (e.g. a single "Word Category" header
+    // would otherwise match both the word and category patterns and collide).
+    state.colMap.word = guessColumn(headers, [/^word$/]) >= 0
+      ? guessColumn(headers, [/^word$/])
+      : guessColumn(headers, [/word/]);
+    state.colMap.ipa = guessColumn(headers, [/ipa/], [state.colMap.word]);
+    state.colMap.category = guessColumn(headers, [/^category$/, /categ/], [state.colMap.word, state.colMap.ipa]);
+    state.colMap.known1 = guessColumn(headers, [/timepoint.?1/, /tp.?1/, /t1\b/, /known.*1/],
+      [state.colMap.word, state.colMap.ipa, state.colMap.category]);
+    state.colMap.known2 = guessColumn(headers, [/timepoint.?2/, /tp.?2/, /t2\b/, /known.*2/],
+      [state.colMap.word, state.colMap.ipa, state.colMap.category, state.colMap.known1]);
     state.rawSheet = { headers, rows };
     state.screen = "upload";
     render();
